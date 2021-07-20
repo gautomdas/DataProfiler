@@ -30,6 +30,17 @@ class TestParquetDataClass(unittest.TestCase):
             dict(path=os.path.join(test_dir, 'snappy_compressed_intentionally_mislabeled_parquet_file.csv'), count=2999),
 
         ]
+
+        cls.buffer_list = []
+        
+        for input_file in cls.input_file_names:
+            buffer = BytesIO(open(input_file['path'], 'rb').read())
+            buffer_info = input_file.copy()
+            buffer_info['path'] = buffer
+            cls.buffer_list.append(buffer_info)
+
+        cls.file_or_buf_list = cls.input_file_names + cls.buffer_list
+
         cls.output_file_path = None
 
     def test_is_match_for_byte_streams(self):
@@ -46,7 +57,7 @@ class TestParquetDataClass(unittest.TestCase):
         """
         Determine if the parquet file can be automatically identified
         """
-        for input_file in self.input_file_names:
+        for input_file in self.file_or_buf_list:
             input_data_obj = Data(input_file['path'])
             self.assertEqual(input_data_obj.data_type, 'parquet')
 
@@ -54,7 +65,7 @@ class TestParquetDataClass(unittest.TestCase):
         """
         Determine if the parquet file can be loaded with manual data_type setting
         """
-        for input_file in self.input_file_names:
+        for input_file in self.file_or_buf_list:
             input_data_obj = Data(input_file["path"], data_type='parquet')
             self.assertEqual(input_data_obj.data_type, 'parquet')
 
@@ -62,7 +73,7 @@ class TestParquetDataClass(unittest.TestCase):
         """
         Determine if the parquet file can be reloaded
         """
-        for input_file in self.input_file_names:
+        for input_file in self.file_or_buf_list:
             input_data_obj = Data(input_file['path'])
             input_data_obj.reload(input_file['path'])
             self.assertEqual(input_data_obj.data_type, 'parquet')
@@ -72,7 +83,7 @@ class TestParquetDataClass(unittest.TestCase):
         """
         Determine if the parquet file data_formats can be used
         """
-        for input_file in self.input_file_names:
+        for input_file in self.file_or_buf_list:
             input_data_obj = Data(input_file['path'])
             for data_format in list(input_data_obj._data_formats.keys()):
                 input_data_obj.data_format = data_format
