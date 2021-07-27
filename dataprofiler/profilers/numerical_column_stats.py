@@ -86,6 +86,7 @@ class NumericStatsMixin(with_metaclass(abc.ABCMeta, object)):
                     'bin_edges': None
                 }
             }
+        self._batch_history = []
         for method in self.histogram_bin_method_names:
             self.histogram_methods[method] = {
                 'total_loss': 0,
@@ -246,6 +247,29 @@ class NumericStatsMixin(with_metaclass(abc.ABCMeta, object)):
         if "num_negatives" in self.__calculations.keys():
             self.num_negatives = other1.num_negatives + other2.num_negatives
 
+    def profile(self):
+        """
+        Property for profile. Returns the profile of the column.
+        :return:
+        """
+        profile = dict(
+            min=self.np_type_to_type(self.min),
+            max=self.np_type_to_type(self.max),
+            sum=self.np_type_to_type(self.sum),
+            mean=self.np_type_to_type(self.mean),
+            variance=self.np_type_to_type(self.variance),
+            stddev=self.np_type_to_type(self.stddev),
+            skewness=self.np_type_to_type(self.skewness),
+            kurtosis=self.np_type_to_type(self.kurtosis),
+            histogram=self._get_best_histogram_for_profile(),
+            quantiles=self.quantiles,
+            num_zeros=self.np_type_to_type(self.num_zeros),
+            num_negatives=self.np_type_to_type(self.num_negatives),
+            times=self.times,
+        )
+
+        return profile
+
     def diff(self, other_profile, options=None):
         """
         Finds the differences for several numerical stats.
@@ -270,6 +294,9 @@ class NumericStatsMixin(with_metaclass(abc.ABCMeta, object)):
                                                    other_profile.variance),
             "stddev": utils.find_diff_of_numbers(self.stddev,
                                                  other_profile.stddev),
+            "t-test": self._perform_t_test(self.mean, self.variance, self.match_count,
+                                           other_profile.mean, other_profile.variance,
+                                           other_profile.match_count)
         }
         return differences
 
@@ -305,6 +332,62 @@ class NumericStatsMixin(with_metaclass(abc.ABCMeta, object)):
             else self._correct_bias_kurtosis(
                     self.match_count,
                     self._biased_kurtosis)
+
+    @staticmethod
+    def _perform_t_test(mean1, var1, n1,
+                        mean2, var2, n2):
+        results = {
+            't-statistic': None,
+            'conservative': {
+                'df': None,
+                'p-value': None
+            },
+            'welch': {
+                'df': None,
+                'p-value': None
+            }
+        }
+
+        invalid_stats = False
+        if n1 <= 1 or n2 <= 1:
+            warnings.warn("Insufficient sample size. "
+                          "T-test cannot be performed.", RuntimeWarning)
+            invalid_stats = True
+        if np.isnan([mean1, mean2, var1, var2]).any() or \
+                None in [mean1, mean2, var1, var2]:
+            warnings.warn("Null value(s) found in mean and/or variance values. "
+                          "T-test cannot be performed.", RuntimeWarning)
+            invalid_stats = True
+        if invalid_stats:
+            return results
+
+        s_delta = var1/n1 + var2/n2
+        t = (mean1 - mean2) / np.sqrt(s_delta)
+        conservative_df = min(n1, n2) - 1
+        welch_df = s_delta ** 2 / ((var1 / n1) ** 2 /
+                                   (n1 - 1) + (var2 / n2) ** 2 / (n2 - 1))
+        results['t-statistic'] = t
+        results['conservative']['df'] = conservative_df
+        results['welch']['df'] = welch_df
+        
+        try:
+            import scipy.stats
+        except ImportError:
+            # Failed, so we return the stats but don't perform the test
+            warnings.warn("Could not import necessary statistical packages. "
+                          "To successfully perform the t-test, please run 'pip "
+                          "install scipy.' T-test results will be incomplete.",
+                          RuntimeWarning)
+            return results
+        # If scipy import was successful, now perform the *two-sided* t-test
+        conservative_t = scipy.stats.t(conservative_df)
+        conservative_p_val = (1 - conservative_t.cdf(abs(t))) * 2
+        welch_t = scipy.stats.t(welch_df)
+        welch_p_val = (1 - welch_t.cdf(abs(t))) * 2
+
+        results['conservative']['p-value'] = conservative_p_val
+        results['welch']['p-value'] = welch_p_val
+        return results
 
     def _update_variance(self, batch_mean, batch_var, batch_count):
         """
@@ -907,10 +990,14 @@ class NumericStatsMixin(with_metaclass(abc.ABCMeta, object)):
                                      "biased_kurtosis": self._biased_kurtosis}
         subset_properties = copy.deepcopy(profile)
         df_series_clean = df_series_clean.astype(float)
-        super(NumericStatsMixin, self)._perform_property_calcs(self.__calculations,
-                                     df_series=df_series_clean,
-                                     prev_dependent_properties=prev_dependent_properties,
-                                     subset_properties=subset_properties)
+        super(NumericStatsMixin, self)._perform_property_calcs(
+            self.__calculations,
+            df_series=df_series_clean,
+            prev_dependent_properties=prev_dependent_properties,
+            subset_properties=subset_properties)
+        if len(self._batch_history) == 5:
+            self._batch_history.pop(0)
+        self._batch_history.append(subset_properties)
 
     @BaseColumnProfiler._timeit(name="min")
     def _get_min(self, df_series, prev_dependent_properties,

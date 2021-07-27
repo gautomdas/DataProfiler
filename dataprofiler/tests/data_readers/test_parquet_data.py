@@ -32,26 +32,29 @@ class TestParquetDataClass(unittest.TestCase):
         ]
 
         cls.buffer_list = []
-        
         for input_file in cls.input_file_names:
-            buffer = BytesIO(open(input_file['path'], 'rb').read())
+            # add BytesIO
             buffer_info = input_file.copy()
-            buffer_info['path'] = buffer
+            with open(input_file['path'], 'rb') as fp:
+                buffer_info['path'] = BytesIO(fp.read())
             cls.buffer_list.append(buffer_info)
 
         cls.file_or_buf_list = cls.input_file_names + cls.buffer_list
 
         cls.output_file_path = None
 
-    def test_is_match_for_byte_streams(self):
+    @classmethod
+    def setUp(cls):
+        for buffer in cls.buffer_list:
+            buffer['path'].seek(0)
+
+    def test_is_match(self):
         """
-        Determine if the parquet file can be automatically identified from byte stream
+        Determine if the parquet file can be automatically identified from
+        byte stream or file path
         """
-        for input_file in self.input_file_names:
-            with open(input_file['path'], 'rb') as fp:
-                byte_string = BytesIO(fp.read())
-                input_data_obj = Data(byte_string)
-                self.assertEqual(input_data_obj.data_type, 'parquet')
+        for input_file in self.file_or_buf_list:
+            self.assertTrue(ParquetData.is_match(input_file['path']))
 
     def test_auto_file_identification(self):
         """
@@ -140,7 +143,7 @@ class TestParquetDataClass(unittest.TestCase):
         the length value.
         """
 
-        for input_file in self.input_file_names:
+        for input_file in self.file_or_buf_list:
             data = Data(input_file["path"])
             self.assertEqual(input_file['count'],
                              len(data),

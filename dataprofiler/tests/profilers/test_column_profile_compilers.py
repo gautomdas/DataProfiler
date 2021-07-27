@@ -7,7 +7,8 @@ import pandas as pd
 
 from dataprofiler.profilers import column_profile_compilers as \
     col_pro_compilers
-from dataprofiler.profilers.profiler_options import BaseOption, StructuredOptions
+from dataprofiler.profilers.profiler_options import BaseOption,\
+    StructuredOptions, UnstructuredOptions
 
 
 class TestBaseProfileCompilerClass(unittest.TestCase):
@@ -70,7 +71,6 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
         merged_compiler = compiler1 + compiler2
         self.assertEqual(3, merged_compiler._profiles['test'])
         self.assertEqual('compiler1', merged_compiler.name)
-
     
     def test_diff_primitive_compilers(self):
         # Test different data types
@@ -115,6 +115,7 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
 
         compiler1 = col_pro_compilers.ColumnPrimitiveTypeProfileCompiler(data1)
         compiler2 = col_pro_compilers.ColumnPrimitiveTypeProfileCompiler(data2)
+
         expected_diff = {
             'data_type_representation': {
                 'datetime': 'unchanged',
@@ -129,10 +130,21 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
                      'sum': 12.0,
                      'mean': 2.0,
                      'variance': 38.666666666666664,
-                     'stddev': 3.285085839971525
-                 }
+                     'stddev': 3.285085839971525,
+                     't-test': {
+                         't-statistic': 0.4155260166386663,
+                         'conservative': {
+                             'df': 1,
+                             'p-value': 0.749287157907667
+                         },
+                         'welch': {
+                             'df': 3.6288111187629117,
+                             'p-value': 0.7011367179395704
+                         }
+                     }
+             }
         }
-
+        self.maxDiff = None
         self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
         
         # Test different compilers
@@ -194,11 +206,23 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
                     'var': -0.5, 
                     'std': -0.71, 
                     'sample_size': 2,
-                    'margin_of_error': -1.6}
+                    'margin_of_error': -1.6
+                },
+                't-test': {
+                    't-statistic': -1.9674775073518591,
+                    'conservative': {
+                        'df': 1,
+                        'p-value': 0.29936264581081673
+                    },
+                    'welch': {
+                        'df': 1.0673824509440946,
+                        'p-value': 0.28696889329266506
+                    }
+                }
             }
         }
         self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
-        
+
         # Test disabling all columns in one compiler
         options.float.is_enabled = False
         options.text.is_enabled = False
@@ -223,6 +247,124 @@ class TestBaseProfileCompilerClass(unittest.TestCase):
         expected_diff = {}
         self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
 
+    def test_compiler_stats_diff(self):
+        data1 = pd.Series(['1', '9', '9'])
+        data2 = pd.Series(['10', '9', '9', '9'])
+        options = StructuredOptions()
+
+        # Test normal diff
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2)
+        expected_diff = {
+            'order': ['ascending', 'descending'], 
+            'categorical': 'unchanged', 
+            'statistics': {
+                'unique_count': 'unchanged', 
+                'unique_ratio': 0.16666666666666663, 
+                'categories': [['1'], ['9'], ['10']], 
+                'gini_impurity': 0.06944444444444448, 
+                'unalikeability': 0.16666666666666663, 
+                'categorical_count': {
+                    '9': -1, 
+                    '1': [1, None], 
+                    '10': [None, 1]
+                }
+            }
+        }
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabled categorical column in one compiler
+        options.category.is_enabled = False
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1, options)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2)
+        expected_diff = {'order': ['ascending', 'descending']}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+        
+        # Test disabling categorical profile in both compilers
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1, options)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2, options)
+        expected_diff = {'order': ['ascending', 'descending']}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabling everything
+        options.order.is_enabled = False
+        compiler1 = col_pro_compilers.ColumnStatsProfileCompiler(data1, options)
+        compiler2 = col_pro_compilers.ColumnStatsProfileCompiler(data2, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+    @mock.patch(
+        'dataprofiler.profilers.data_labeler_column_profile.DataLabeler')
+    @mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+               "DataLabelerColumn.update")
+    def test_compiler_data_labeler_diff(self, *mocked_datalabeler):
+        # Initialize dummy data
+        data = pd.Series([])
+
+        # Test normal diff
+        compiler1 = col_pro_compilers.ColumnDataLabelerCompiler(data)
+        compiler2 = col_pro_compilers.ColumnDataLabelerCompiler(data)
+
+        # Mock out the data_label, avg_predictions, and label_representation
+        # properties
+        with mock.patch("dataprofiler.profilers.data_labeler_column_profile"
+                        ".DataLabelerColumn.data_label"), \
+             mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                        "DataLabelerColumn.avg_predictions"), \
+             mock.patch("dataprofiler.profilers.data_labeler_column_profile."
+                        "DataLabelerColumn.label_representation"):
+            compiler1._profiles["data_labeler"].data_label = "a"
+            compiler1._profiles["data_labeler"].avg_predictions = {
+                "a": 0.25,
+                "b": 0.0,
+                "c": 0.75
+            }
+            compiler1._profiles["data_labeler"].label_representation = {
+                "a": 0.15,
+                "b": 0.01,
+                "c": 0.84
+            }
+        
+            compiler2._profiles["data_labeler"].data_label = "b"
+            compiler2._profiles["data_labeler"].avg_predictions = {
+                "a": 0.25,
+                "b": 0.70,
+                "c": 0.05
+            }
+            compiler2._profiles["data_labeler"].label_representation = {
+                "a": 0.99,
+                "b": 0.01,
+                "c": 0.0
+            }
+            
+            expected_diff = {
+                'statistics': {
+                    'avg_predictions': {
+                        'a': 'unchanged',
+                        'b': -0.7,
+                        'c': 0.7
+                    },
+                    'label_representation': {
+                        'a': -0.84, 
+                        'b': 'unchanged',
+                        'c': 0.84
+                    }
+                },
+                'data_label': [['a'], [], ['b']]
+            }
+            self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabling one datalabeler profile for compiler diff
+        options = StructuredOptions()
+        options.data_labeler.is_enabled = False
+        compiler1 = col_pro_compilers.ColumnDataLabelerCompiler(data, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test disabling both datalabeler profiles for compiler diff
+        compiler2 = col_pro_compilers.ColumnDataLabelerCompiler(data, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
 
     @mock.patch.multiple(
         col_pro_compilers.BaseCompiler, __abstractmethods__=set())
@@ -281,10 +423,9 @@ class TestUnstructuredCompiler(unittest.TestCase):
                                 'o': 2, 's': 2, 't': 2, 'y': 1},
                 'vocab': [' ', '-', '.', '1', '2', '3', '4', 'D', 'J', 'a', 'e',
                           'h', 'i', 'm', 'n', 'o', 's', 't', 'y'],
-                'word_count': {'123': 1, '1234': 1, '432': 1, 'Doe': 1,
+                'word_count': {'123-432-1234': 1, 'Doe': 1,
                                'John': 1, 'hi': 1, 'name': 1, 'test': 1},
-                'words': ['test', 'hi', 'name', 'John', 'Doe', '123', '432',
-                          '1234']}}
+                'words': ['test', 'hi', 'name', 'John', 'Doe', '123-432-1234']}}
 
         output_profile = compiler.profile
 
@@ -295,8 +436,162 @@ class TestUnstructuredCompiler(unittest.TestCase):
             output_profile['statistics']['vocab'] = \
                 sorted(output_profile['statistics']['vocab'])
 
-        self.maxDiff = None
         self.assertDictEqual(expected_dict, output_profile)
+
+    @mock.patch('dataprofiler.profilers.unstructured_labeler_profile.'
+                'DataLabeler')
+    @mock.patch('dataprofiler.profilers.unstructured_labeler_profile.'
+                'CharPostprocessor')
+    def test_compiler_stats_diff(self, *mocks):
+        data1 = pd.Series(['Hello Hello', 'This is a test grant'])
+        data2 = pd.Series(['This is unknown', 'my name grant', '9', '9'])
+
+        # Test normal diff
+        compiler1 = col_pro_compilers.UnstructuredCompiler(data1)
+        compiler2 = col_pro_compilers.UnstructuredCompiler(data2)
+        labeler_1 = compiler1._profiles["data_labeler"]
+        labeler_2 = compiler2._profiles["data_labeler"]
+
+        labeler_1.char_sample_size = 20
+        labeler_1.word_sample_size = 15
+        entity_counts = {
+            'word_level': {
+                'UNKNOWN': 5,
+                'TEST': 5,
+                'UNIQUE1': 5
+            },
+            'true_char_level': {
+                'UNKNOWN': 4,
+                'TEST': 8,
+                'UNIQUE1': 8
+            },
+            'postprocess_char_level': {
+                'UNKNOWN': 5,
+                'TEST': 10,
+                'UNIQUE1': 5
+            }
+        }
+        labeler_1.entity_counts = entity_counts
+        labeler_1.update(pd.Series(["a"]))
+
+
+        labeler_2.char_sample_size = 20
+        labeler_2.word_sample_size = 10
+        entity_counts = {
+            'word_level': {
+                'UNKNOWN': 2,
+                'TEST': 4,
+                'UNIQUE2': 4
+            },
+            'true_char_level': {
+                'UNKNOWN': 8,
+                'TEST': 8,
+                'UNIQUE2': 4
+            },
+            'postprocess_char_level': {
+                'UNKNOWN': 5,
+                'TEST': 10,
+                'UNIQUE2': 5
+            }
+        }
+        labeler_2.entity_counts = entity_counts
+        labeler_2.update(pd.Series(["a"]))
+
+        expected_diff = {
+            'statistics': {
+                'vocab': [['H', 'l'], 
+                          ['e', 'o', ' ', 'T', 'h', 'i', 's', 'a', 't', 'g', 
+                           'r', 'n'], 
+                          ['u', 'k', 'w', 'm', 'y', '9']], 
+                'vocab_count': [{'l': 4, 'H': 2}, 
+                                {' ': 1, 'e': 2, 's': 1, 't': 2, 'o': 1, 
+                                 'i': 'unchanged', 'a': 'unchanged', 
+                                 'T': 'unchanged', 'h': 'unchanged', 
+                                 'g': 'unchanged', 'r': 'unchanged', 'n': -4}, 
+                                {'m': 2, '9': 2, 'u': 1, 'k': 1, 'w': 1, 'y': 1}], 
+                'words': [['Hello', 'test'], ['grant'], ['unknown', 'name', '9']], 
+                'word_count': [{'Hello': 2, 'test': 1}, 
+                               {'grant': 'unchanged'}, 
+                               {'9': 2, 'unknown': 1, 'name': 1}]
+            }, 
+            'data_label': {
+                'entity_counts': {
+                    'word_level': {
+                        'UNKNOWN': 3, 
+                        'TEST': 1, 
+                        'UNIQUE1': [5, None], 
+                        'UNIQUE2': [None, 4]
+                    }, 
+                    'true_char_level': {
+                        'UNKNOWN': -4, 
+                        'TEST': 'unchanged', 
+                        'UNIQUE1': [8, None], 
+                        'UNIQUE2': [None, 4]
+                    }, 
+                    'postprocess_char_level': {
+                        'UNKNOWN': 'unchanged', 
+                        'TEST': 'unchanged', 
+                        'UNIQUE1': [5, None], 
+                        'UNIQUE2': [None, 5]
+                    }
+                }, 
+                'entity_percentages': {
+                    'word_level': {
+                        'UNKNOWN': 0.1333333333333333, 
+                        'TEST': -0.06666666666666671, 
+                        'UNIQUE1': [0.3333333333333333, None], 
+                        'UNIQUE2': [None, 0.4]
+                    }, 
+                    'true_char_level': {
+                        'UNKNOWN': -0.2, 
+                        'TEST': 'unchanged', 
+                        'UNIQUE1': [0.4, None], 
+                        'UNIQUE2': [None, 0.2]
+                    }, 
+                    'postprocess_char_level': {
+                        'UNKNOWN': 'unchanged', 
+                        'TEST': 'unchanged', 
+                        'UNIQUE1': [0.25, None], 
+                        'UNIQUE2': [None, 0.25]
+                    }
+                }
+            }
+        }
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+        
+        # Test while disabling a column
+        options = UnstructuredOptions()
+        options.data_labeler.is_enabled = False
+        compiler2 = col_pro_compilers.UnstructuredCompiler(data2, options)
+        expected_diff = {
+            'statistics': {
+                'vocab': [['H', 'l'],
+                          ['e', 'o', ' ', 'T', 'h', 'i', 's', 'a', 't', 'g', 
+                           'r', 'n'],
+                          ['u', 'k', 'w', 'm', 'y', '9']],
+                'vocab_count': [{'l': 4, 'H': 2}, 
+                                {' ': 1, 'e': 2, 's': 1, 't': 2, 'o': 1, 
+                                 'i': 'unchanged', 'a': 'unchanged', 
+                                 'T': 'unchanged', 'h': 'unchanged', 
+                                 'g': 'unchanged', 'r': 'unchanged', 'n': -4}, 
+                                {'m': 2, '9': 2, 'u': 1, 'k': 1, 'w': 1, 'y': 1}],
+                'words': [['Hello', 'test'], ['grant'], ['unknown', 'name', '9']],
+                'word_count': [{'Hello': 2, 'test': 1},
+                               {'grant': 'unchanged'},
+                               {'9': 2, 'unknown': 1, 'name': 1}]
+            }
+        }
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+        
+        # Test while disabling 2 columns
+        options.text.is_enabled = False
+        compiler2 = col_pro_compilers.UnstructuredCompiler(data2, options)
+        expected_diff = {}
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
+
+        # Test while disabling all columns
+        compiler1 = col_pro_compilers.UnstructuredCompiler(data1, options)
+        self.assertDictEqual(expected_diff, compiler1.diff(compiler2))
 
 
 if __name__ == '__main__':

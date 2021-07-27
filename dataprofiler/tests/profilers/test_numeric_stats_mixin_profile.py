@@ -503,10 +503,69 @@ class TestNumericStatsMixin(unittest.TestCase):
         self.assertEqual(num_profiler.num_zeros, 0)
         self.assertEqual(num_profiler.num_negatives, 0)
 
+    def test_profile(self):
+        num_profiler = TestColumn()
+
+        mock_profile = dict(
+            min=1.0,
+            max=1.0,
+            sum=1.0,
+            mean=0, # default
+            variance=np.nan, # default
+            skewness=np.nan, # default
+            kurtosis=np.nan, # default
+            stddev=np.nan, # default
+            histogram={
+                'bin_counts': np.array([1, 1, 1]),
+                'bin_edges': np.array([1.0, 2.0, 3.0, 4.0])
+            },
+            quantiles={
+                0: 2.0,
+                1: 3.0,
+                2: 4.0,
+            },
+            num_zeros=0, # default
+            num_negatives=0, # default
+            times=defaultdict(float), # default
+        )
+
+        num_profiler.match_count = 0
+        num_profiler.min = mock_profile['min']
+        num_profiler.max = mock_profile['max']
+        num_profiler.sum = mock_profile['sum']
+        num_profiler.histogram_selection = 'auto'
+        num_profiler.histogram_methods['auto']['histogram'] = \
+            mock_profile['histogram']
+        num_profiler.quantiles = mock_profile['quantiles']
+        num_profiler.times = mock_profile['times']
+
+        time_array = [float(i) for i in range(100, 0, -1)]
+        with mock.patch('time.time', side_effect=lambda: time_array.pop()):
+            # Validate that the times dictionary is empty
+            self.assertEqual(defaultdict(float), num_profiler.times)
+
+            profile = num_profiler.profile()
+            # pop out the histogram and quartiles to test separately from the
+            # rest of the dict as we need comparison with some precision
+            histogram = profile.pop('histogram')
+            expected_histogram = mock_profile.pop('histogram')
+            quartiles = profile.pop('quantiles')
+            expected_quartiles = mock_profile.pop('quantiles')
+
+            self.assertDictEqual(mock_profile, profile)
+            self.assertEqual(expected_histogram['bin_counts'].tolist(),
+                             histogram['bin_counts'].tolist())
+            self.assertCountEqual(np.round(expected_histogram['bin_edges'], 12),
+                                  np.round(histogram['bin_edges'], 12))
+            self.assertAlmostEqual(expected_quartiles[0], quartiles[0])
+            self.assertAlmostEqual(expected_quartiles[1], quartiles[1])
+            self.assertAlmostEqual(expected_quartiles[2], quartiles[2])
+
     def test_diff(self):
         """
         Checks _diff_helper() works appropriately.
         """
+
         other1, other2 = TestColumn(), TestColumn()
         other1.min = 3
         other1.max = 4
@@ -519,17 +578,157 @@ class TestNumericStatsMixin(unittest.TestCase):
         other2._biased_variance = 9
         other2.sum = 6
         other2.match_count = 20
-        
+
+        # T-stat and Welch's df calculation can be found here:
+        #    https://en.wikipedia.org/wiki/Welch%27s_t-test#Calculations
+        # Conservative df = min(count1, count2) - 1
+        # P-value is found using scipy:  (1 - CDF(abs(t-stat))) * 2
         expected_diff = {
             'min': 'unchanged',
             'max': [4, None],
             'sum': 'unchanged',
             'mean': 0.3,
-            'variance': -8.362573099415204,
-            'stddev': -2.0238425028660023
+            'variance': 10 / 9 - (9 * 20 / 19),
+            'stddev': np.sqrt(10 / 9) - np.sqrt(9 * 20 / 19),
+            't-test': {
+                't-statistic': 0.3923009049186606,
+                'conservative': {
+                    'df': 9,
+                    'p-value': 0.7039643545772609
+                },
+                'welch': {
+                    'df': 25.945257024943864,
+                    'p-value': 0.6980401261750298
+                }
+            }
         }
-        self.assertDictEqual(expected_diff, other1.diff(other2))
-        
+        difference = other1.diff(other2)
+        self.assertDictEqual(expected_diff, difference)
+
+        # Invalid statistics
+        other1, other2 = TestColumn(), TestColumn()
+        other1.min = 3
+        other1.max = 4
+        other1._biased_variance = np.nan # NaN variance
+        other1.sum = 6
+        other1.match_count = 10
+
+        other2.min = 3
+        other2.max = None
+        other2._biased_variance = 9
+        other2.sum = 6
+        other2.match_count = 20
+
+        expected_diff = {
+            'min': 'unchanged',
+            'max': [4, None],
+            'sum': 'unchanged',
+            'mean': 0.3,
+            'variance': np.nan,
+            'stddev': np.nan,
+            't-test': {
+                't-statistic': None,
+                'conservative': {
+                    'df': None,
+                    'p-value': None
+                },
+                'welch': {
+                    'df': None,
+                    'p-value': None
+                }
+            }
+        }
+        expected_var = expected_diff.pop('variance')
+        expected_stddev = expected_diff.pop('stddev')
+        with self.assertWarns(RuntimeWarning, msg=
+                                "Null value(s) found in mean and/or variance values. "
+                                "T-test cannot be performed"):
+            difference = other1.diff(other2)
+        var = difference.pop('variance')
+        stddev = difference.pop('stddev')
+        self.assertDictEqual(expected_diff, difference)
+        self.assertTrue(np.isnan([expected_var, var, expected_stddev, stddev]).all())
+
+        # Insufficient match count
+        other1, other2 = TestColumn(), TestColumn()
+        other1.min = 3
+        other1.max = 4
+        other1._biased_variance = 1
+        other1.sum = 6
+        other1.match_count = 10
+
+        other2.min = 3
+        other2.max = None
+        other2._biased_variance = 9
+        other2.sum = 6
+        other2.match_count = 1 # Insufficient count
+
+        expected_diff = {
+            'min': 'unchanged',
+            'max': [4, None],
+            'sum': 'unchanged',
+            'mean': -5.4,
+            'variance': np.nan,
+            'stddev': np.nan,
+            't-test': {
+                't-statistic': None,
+                'conservative': {
+                    'df': None,
+                    'p-value': None
+                },
+                'welch': {
+                    'df': None,
+                    'p-value': None
+                }
+            }
+        }
+        expected_var = expected_diff.pop('variance')
+        expected_stddev = expected_diff.pop('stddev')
+        with self.assertWarns(RuntimeWarning, msg=
+                                   "Insufficient sample size. "
+                                   "T-test cannot be performed."):
+            difference = other1.diff(other2)
+        var = difference.pop('variance')
+        stddev = difference.pop('stddev')
+        self.assertDictEqual(expected_diff, difference)
+        self.assertTrue(np.isnan([expected_var, var, expected_stddev, stddev]).all())
+
+        # Small p-value
+        other1, other2 = TestColumn(), TestColumn()
+        other1.min = 3
+        other1.max = 4
+        other1._biased_variance = 1
+        other1.sum = 6
+        other1.match_count = 10
+
+        other2.min = 3
+        other2.max = None
+        other2._biased_variance = 9
+        other2.sum = 60
+        other2.match_count = 20
+
+        expected_diff = {
+            'min': 'unchanged',
+            'max': [4, None],
+            'sum': -54,
+            'mean': -2.4,
+            'variance': 10 / 9 - (9 * 20 / 19),
+            'stddev': np.sqrt(10 / 9) - np.sqrt(9 * 20 / 19),
+            't-test': {
+                't-statistic': -3.138407239349285,
+                'conservative': {
+                    'df': 9,
+                    'p-value': 0.011958658754358975
+                },
+                'welch': {
+                    'df': 25.945257024943864,
+                    'p-value': 0.004201616692122823
+                }
+            }
+        }
+        difference = other1.diff(other2)
+        self.assertDictEqual(expected_diff, difference)
+
         # Assert type error is properly called
         with self.assertRaises(TypeError) as exc:
             other1.diff("Inproper input")

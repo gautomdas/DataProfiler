@@ -127,7 +127,7 @@ class TestUnstructuredTextProfile(unittest.TestCase):
         
         # Assert words is correct and stop words are not present
         expected_words = ['Bob', 'Grant', 'friends', 'Hello', 'name']
-        self.assertListEqual(expected_words, profile['words'])
+        self.assertCountEqual(expected_words, profile['words'])
         self.assertNotIn("is", profile['words'])
 
         # Assert word counts are correct
@@ -139,6 +139,65 @@ class TestUnstructuredTextProfile(unittest.TestCase):
         self.assertIn("vocab", profile["times"])
         self.assertIn("words", profile["times"])
         
+    def test_diff_profiles(self):
+        text_profile1 = TextProfiler("Name")
+        sample = pd.Series(["Hello my name is: Grant.!!!"])
+        text_profile1.update(sample)
+
+        text_profile2 = TextProfiler("Name")
+        sample = pd.Series(["Bob and \"grant\", 'are' friends Grant Grant"])
+        text_profile2.update(sample)
+        
+        expected_diff = {
+            'vocab': [['H', 'l', 'm', 'y', ':', '.', '!'], 
+                      ['e', 'o', ' ', 'n', 'a', 'i', 's', 'G', 'r', 't'], 
+                      ['B', 'b', 'd', '"', 'g', ',', "'", 'f']], 
+            'vocab_count': [{'!': 3, 'l': 2, 'm': 2, 'H': 1, 'y': 1, 
+                             ':': 1, '.': 1}, 
+                            {' ': -2, 'e': 'unchanged', 'n': -3, 'a': -3, 
+                             'o': 'unchanged', 'i': 'unchanged', 
+                             's': 'unchanged', 'G': -1, 'r': -4, 't': -2}, 
+                            {'d': 2, '"': 2, "'": 2, 'B': 1, 'b': 1, 'g': 1, 
+                             ',': 1, 'f': 1}], 
+            'words': [['Hello', 'name'], ['Grant'], ['Bob', 'grant', 'friends']], 
+            'word_count': [{'Hello': 1, 'name': 1}, 
+                           {'Grant': -1}, 
+                           {'Bob': 1, 'grant': 1, 'friends': 1}]
+        }
+        self.assertDictEqual(expected_diff, text_profile1.diff(text_profile2))
+
+
+        # Test when one profiler is not case sensitive
+        text_profile1 = TextProfiler("Name")
+        sample = pd.Series(["Hello my name is: Grant.!!!"])
+        text_profile1.update(sample)
+        
+        options = TextProfilerOptions()
+        options.is_case_sensitive = False
+        text_profile2 = TextProfiler("Name", options=options)
+        sample = pd.Series(["Bob and \"grant\", 'are' friends Grant Grant"])
+        text_profile2.update(sample)
+
+        expected_diff = {
+            'vocab': [['H', 'l', 'm', 'y', ':', '.', '!'], 
+                      ['e', 'o', ' ', 'n', 'a', 'i', 's', 'G', 'r', 't'],
+                      ['B', 'b', 'd', '"', 'g', ',', "'", 'f']],
+            'vocab_count': [{'!': 3, 'l': 2, 'm': 2, 'H': 1, 'y': 1, 
+                             ':': 1, '.': 1}, 
+                            {' ': -2, 'e': 'unchanged', 'n': -3, 'a': -3, 
+                             'o': 'unchanged', 'i': 'unchanged', 's': 'unchanged',
+                             'G': -1, 'r': -4, 't': -2}, 
+                            {'d': 2, '"': 2, "'": 2, 'B': 1, 'b': 1, 'g': 1, 
+                             ',': 1, 'f': 1}], 
+            'words': [['hello', 'name'],
+                      ['grant'],
+                      ['bob', 'friends']], 
+            'word_count': [{'hello': 1, 'name': 1},
+                           {'grant': -2},
+                           {'bob': 1, 'friends': 1}]
+        }
+        self.assertDictEqual(expected_diff, text_profile1.diff(text_profile2))
+
     def test_case_sensitivity(self):
         text_profile1 = TextProfiler("Name")
         text_profile1._is_case_sensitive = False
@@ -160,6 +219,18 @@ class TestUnstructuredTextProfile(unittest.TestCase):
                 " were conflicting values for case sensitivity between the two "
                 "profiles being merged."):
             text_profile3 = text_profile1 + text_profile2
+            profile = text_profile3.profile
+            # Assert word counts are correct
+            expected_word_count = {'hello': 1, 'name': 1, 'grant': 2, 'bob': 1,
+                                   'friends': 1}
+            self.assertDictEqual(expected_word_count, profile['word_count'])
+
+        # change the merge order
+        with self.assertWarnsRegex(UserWarning,
+                "The merged Text Profile will not be case sensitive since there"
+                " were conflicting values for case sensitivity between the two "
+                "profiles being merged."):
+            text_profile3 = text_profile2 + text_profile1
             profile = text_profile3.profile
             # Assert word counts are correct
             expected_word_count = {'hello': 1, 'name': 1, 'grant': 2, 'bob': 1,
@@ -218,12 +289,12 @@ class TestUnstructuredTextProfile(unittest.TestCase):
     def test_merge_most_common_words_count(self):
         ### default values of most common words for both profiles
         text_profile1 = TextProfiler("Name")
-        text_profile1._stop_words = []  # set stop_words to empty list for easy inspection
+        text_profile1._stop_words = set()  # set stop_words to empty for easy inspection
         sample1 = pd.Series(["this is test,", " this is a test sentence"])
         text_profile1.update(sample1)
 
         text_profile2 = TextProfiler("Name")
-        text_profile2._stop_words = []  # set stop_words to empty list for easy inspection
+        text_profile2._stop_words = set()  # set stop_words to empty for easy inspection
         sample2 = pd.Series(["this is", "this"])
         text_profile2.update(sample2)
 

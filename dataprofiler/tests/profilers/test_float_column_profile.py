@@ -876,7 +876,7 @@ class TestFloatColumn(unittest.TestCase):
         profiler.update(df)
         self.assertEqual(4, profiler.precision['sample_size'])
 
-        # Trun on precision, set 0.5 sample_size
+        # Turn on precision, set 0.5 sample_size
         options = FloatOptions()
         options.set({"precision.sample_ratio": 0.5})
         profiler = FloatColumn(df.name, options=options)
@@ -1331,6 +1331,17 @@ class TestFloatColumn(unittest.TestCase):
                 'sample_size': -1,
                 'margin_of_error':
                     profile1['precision']['margin_of_error'] - profiler2['precision']['margin_of_error']
+            },
+            't-test': {
+                't-statistic': 0.5393164101529813,
+                'conservative': {
+                    'df': 2,
+                    'p-value': 0.643676756587475
+                },
+                'welch': {
+                    'df': 4.999127432888682,
+                    'p-value': 0.6128117908944144
+                }
             }
         }
         self.assertDictEqual(expected_diff, diff)
