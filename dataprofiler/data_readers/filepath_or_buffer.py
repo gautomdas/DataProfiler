@@ -43,9 +43,6 @@ class FileOrBufferHandler:
                 TextIOWrapper(self._filepath_or_buffer, encoding=self._encoding)
             self._is_wrapped = True
 
-        elif isinstance(self._filepath_or_buffer, BytesIO) and self.open_method == 'r':
-            self._filepath_or_buffer = DetachingTextIOWrapper(self._filepath_or_buffer, encoding=self._encoding)
-
         elif not data_utils.is_stream_buffer(self._filepath_or_buffer):
             # Raise AttributeError if attribute value not found.
             raise AttributeError(f'Type {type(self._filepath_or_buffer)} is '
